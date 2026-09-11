@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+<title>Notes</title>
+<meta name="description" content="A simple, modern notes app that syncs across your devices." />
+
+<!-- PWA / iOS standalone app support -->
+<meta name="theme-color" content="#3454D1" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Notes" />
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png" />
+<link rel="icon" type="image/png" sizes="64x64" href="icons/favicon-64.png" />
+
+<!-- Typefaces: grotesk sans for UI chrome, serif + mono options for note content -->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=Lora:ital,wght@0,400;0,600;1,400&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<!-- ===================== AUTH SCREEN ===================== -->
+<main id="auth-screen" class="auth-screen" hidden>
+  <div class="auth-card">
+    <div class="auth-mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="26" height="26" fill="none">
+        <path d="M6 3h9l5 5v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z" fill="#F7F6F1"/>
+        <path d="M15 3v5h5" fill="#24409C"/>
+        <path d="M8.5 13h7M8.5 16h7M8.5 10.2h4" stroke="#3454D1" stroke-width="1.15" stroke-linecap="round"/>
+      </svg>
+    </div>
+    <h1>Notes</h1>
+    <p class="auth-sub">Sign in to write and sync across your devices.</p>
+
+    <form id="auth-form" class="auth-form" novalidate>
+      <label class="field">
+        <span>Email</span>
+        <input type="email" id="auth-email" autocomplete="email" required />
+      </label>
+      <label class="field">
+        <span>Password</span>
+        <input type="password" id="auth-password" autocomplete="current-password" required minlength="6" />
+      </label>
+      <p id="auth-error" class="auth-error" role="alert" hidden></p>
+      <button type="submit" id="auth-submit" class="btn-primary">Continue</button>
+    </form>
+
+    <button type="button" id="auth-toggle" class="auth-toggle">New here? Create an account</button>
+  </div>
+</main>
+
+<!-- ===================== APP SCREEN ===================== -->
+<div id="app-screen" class="app" hidden>
+
+  <div id="sidebar-backdrop" class="sidebar-backdrop" hidden></div>
+
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-top">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-name">Notes</span>
+      </div>
+      <button id="new-note-btn" class="icon-btn icon-btn-accent" title="New note" aria-label="New note">
+        <svg viewBox="0 0 24 24" width="18" height="18"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+
+    <div class="search-wrap">
+      <svg viewBox="0 0 24 24" width="15" height="15" class="search-icon"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M21 21l-4.3-4.3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      <input id="search-input" type="search" placeholder="Search notes" aria-label="Search notes" />
+    </div>
+
+    <nav id="notes-list" class="notes-list" aria-label="Notes list"></nav>
+
+    <div id="empty-state" class="empty-state" hidden>
+      <p>No notes yet.</p>
+      <p class="empty-sub">Tap + to write your first one.</p>
+    </div>
+
+    <div class="sidebar-bottom">
+      <span id="account-email" class="account-email"></span>
+      <button id="sign-out-btn" class="link-btn">Sign out</button>
+    </div>
+  </aside>
+
+  <!-- Editor -->
+  <section class="editor-area">
+    <header class="toolbar">
+      <button id="menu-btn" class="icon-btn menu-btn" title="Notes" aria-label="Show notes list">
+        <svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 6h16M4 12h16M4 18h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      </button>
+
+      <div class="toolbar-group">
+        <label class="sr-only" for="font-select">Font</label>
+        <select id="font-select" class="tb-select" title="Font"></select>
+
+        <label class="sr-only" for="size-select">Font size</label>
+        <select id="size-select" class="tb-select tb-select-narrow" title="Font size"></select>
+      </div>
+
+      <div class="toolbar-divider" role="separator"></div>
+
+      <div class="toolbar-group">
+        <button type="button" class="fmt-btn" data-cmd="bold" title="Bold" aria-label="Bold"><b>B</b></button>
+        <button type="button" class="fmt-btn fmt-italic" data-cmd="italic" title="Italic" aria-label="Italic"><i>I</i></button>
+        <button type="button" class="fmt-btn fmt-underline" data-cmd="underline" title="Underline" aria-label="Underline"><u>U</u></button>
+        <button type="button" class="fmt-btn" data-cmd="insertUnorderedList" title="Bulleted list" aria-label="Bulleted list">
+          <svg viewBox="0 0 24 24" width="16" height="16"><circle cx="4.5" cy="6" r="1.4" fill="currentColor"/><circle cx="4.5" cy="12" r="1.4" fill="currentColor"/><circle cx="4.5" cy="18" r="1.4" fill="currentColor"/><path d="M9 6h11M9 12h11M9 18h11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+
+      <div class="toolbar-divider" role="separator"></div>
+
+      <div class="toolbar-group">
+        <label class="sr-only" for="page-select">Paper size</label>
+        <select id="page-select" class="tb-select" title="Paper size"></select>
+      </div>
+
+      <div class="toolbar-spacer"></div>
+
+      <div class="toolbar-group">
+        <span id="save-status" class="save-status"><span class="save-dot"></span><span id="save-status-text">Saved</span></span>
+        <button id="delete-note-btn" class="icon-btn" title="Delete note" aria-label="Delete note">
+          <svg viewBox="0 0 24 24" width="17" height="17"><path d="M4 7h16M9.5 7V5a1.5 1.5 0 0 1 1.5-1.5h2A1.5 1.5 0 0 1 14.5 5v2M6.5 7l.8 12.2A2 2 0 0 0 9.3 21h5.4a2 2 0 0 0 2-1.8L18.5 7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <div class="canvas-scroller">
+      <div id="no-note-state" class="no-note-state">
+        <p>Select a note, or start a new one.</p>
+      </div>
+
+      <div id="page-wrap" class="page-wrap" hidden>
+        <div id="page" class="page">
+          <input id="title-input" class="title-input" type="text" placeholder="Untitled" autocomplete="off" />
+          <div id="body-editable" class="body-editable" contenteditable="true" spellcheck="true" data-placeholder="Start writing…"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
