@@ -42,22 +42,18 @@ const PAGE_SIZES = [
 ];
 const DEFAULT_PAGE_SIZE = "a4";
 
+const NOTE_COLORS = [
+  "#E39A93", "#EFC373", "#9BC792", "#7FC3C9",
+  "#8FAEE0", "#B79EDB", "#D9A6C2", "#B9AF9B",
+];
+
 const SAVE_DEBOUNCE_MS = 700;
 const LAST_SETTINGS_KEY = "notes-app:last-settings";
+const LOCAL_NOTES_KEY = "notes-app:local-notes";
 
 /* =========================================================
    DOM references
    ========================================================= */
-const authScreen = document.getElementById("auth-screen");
-const appScreen = document.getElementById("app-screen");
-
-const authForm = document.getElementById("auth-form");
-const authEmail = document.getElementById("auth-email");
-const authPassword = document.getElementById("auth-password");
-const authError = document.getElementById("auth-error");
-const authSubmit = document.getElementById("auth-submit");
-const authToggle = document.getElementById("auth-toggle");
-
 const sidebar = document.getElementById("sidebar");
 const sidebarBackdrop = document.getElementById("sidebar-backdrop");
 const menuBtn = document.getElementById("menu-btn");
@@ -65,14 +61,32 @@ const newNoteBtn = document.getElementById("new-note-btn");
 const searchInput = document.getElementById("search-input");
 const notesListEl = document.getElementById("notes-list");
 const emptyStateEl = document.getElementById("empty-state");
+
+const signedOutRow = document.getElementById("signed-out-row");
+const signedInRow = document.getElementById("signed-in-row");
+const signInOpenBtn = document.getElementById("sign-in-open-btn");
 const accountEmailEl = document.getElementById("account-email");
 const signOutBtn = document.getElementById("sign-out-btn");
+
+const authModal = document.getElementById("auth-modal");
+const authModalClose = document.getElementById("auth-modal-close");
+const authForm = document.getElementById("auth-form");
+const authEmail = document.getElementById("auth-email");
+const authPassword = document.getElementById("auth-password");
+const authError = document.getElementById("auth-error");
+const authSubmit = document.getElementById("auth-submit");
+const authToggle = document.getElementById("auth-toggle");
 
 const fontSelect = document.getElementById("font-select");
 const sizeSelect = document.getElementById("size-select");
 const pageSelect = document.getElementById("page-select");
-const fmtButtons = Array.from(document.querySelectorAll(".fmt-btn"));
+const fmtButtons = Array.from(document.querySelectorAll(".fmt-btn[data-cmd]"));
+const colorTagBtn = document.getElementById("color-tag-btn");
+const colorPopover = document.getElementById("color-popover");
+const pinNoteBtn = document.getElementById("pin-note-btn");
+const duplicateNoteBtn = document.getElementById("duplicate-note-btn");
 const deleteNoteBtn = document.getElementById("delete-note-btn");
+const wordCountEl = document.getElementById("word-count");
 const saveStatusEl = document.getElementById("save-status");
 const saveStatusText = document.getElementById("save-status-text");
 
@@ -87,16 +101,16 @@ const bodyEditable = document.getElementById("body-editable");
    ========================================================= */
 let currentUser = null;
 let unsubscribeNotes = null;
+let storeMode = "local";       // "local" (on this device only) | "cloud" (synced via Firestore)
 
-let notes = [];               // all notes for the signed-in user, most recently updated first
-let currentNoteId = null;      // which note is open in the editor
+let notes = [];                 // notes for the active store, sorted: pinned first, then most recent
+let currentNoteId = null;
 let searchTerm = "";
+let autoOpenAttempted = false;  // open the most recent note automatically, once per store
 
-let saveTimer = null;
-let lastLocalEditAt = 0;       // Date.now() of the most recent local keystroke, used to avoid
-                                // clobbering in-progress edits with a remote snapshot update
+let lastLocalEditAt = 0;
 let isAuthSubmitting = false;
-let authMode = "signin";       // "signin" | "signup"
+let authMode = "signin";        // "signin" | "signup"
 
 /* =========================================================
    Small helpers
@@ -107,6 +121,11 @@ function debounce(fn, ms) {
     clearTimeout(t);
     t = setTimeout(() => fn(...args), ms);
   };
+}
+
+function makeId() {
+  if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  return `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 function readLastSettings() {
@@ -156,13 +175,181 @@ function plainTextFromHtml(html) {
 
 function toDate(value) {
   if (!value) return null;
+  if (typeof value === "string") {
+    const d = new Date(value);
+    return isNaN(d.getTime()) ? null : d;
+  }
   if (value instanceof Timestamp) return value.toDate();
   if (value.toDate) return value.toDate();
   return null;
 }
 
+function sortNotes(list) {
+  return [...list].sort((a, b) => {
+    const pa = a.pinned ? 1 : 0;
+    const pb = b.pinned ? 1 : 0;
+    if (pa !== pb) return pb - pa;
+    const da = toDate(a.updatedAt) || toDate(a.createdAt) || new Date(0);
+    const db = toDate(b.updatedAt) || toDate(b.createdAt) || new Date(0);
+    return db - da;
+  });
+}
+
 /* =========================================================
-   Auth screen
+   Local storage — notes kept on this device only
+   ========================================================= */
+function loadLocalNotesRaw() {
+  try {
+    const raw = localStorage.getItem(LOCAL_NOTES_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveLocalNotesRaw(list) {
+  try {
+    localStorage.setItem(LOCAL_NOTES_KEY, JSON.stringify(list));
+  } catch {
+    /* ignore */
+  }
+}
+
+function loadLocal() {
+  storeMode = "local";
+  notes = sortNotes(loadLocalNotesRaw());
+  renderNotesList();
+  maybeAutoOpen();
+}
+
+/* =========================================================
+   Firestore — notes synced to the signed-in account
+   ========================================================= */
+function notesCollection(uid) {
+  return collection(db, "users", uid, "notes");
+}
+
+function subscribeToNotes(uid) {
+  const q = query(notesCollection(uid), orderBy("updatedAt", "desc"));
+  unsubscribeNotes = onSnapshot(
+    q,
+    (snapshot) => {
+      notes = sortNotes(snapshot.docs.map((d) => ({ id: d.id, ...d.data() })));
+      renderNotesList();
+      maybeAutoOpen();
+
+      if (currentNoteId) {
+        const openedNote = notes.find((n) => n.id === currentNoteId);
+        if (!openedNote) {
+          currentNoteId = null;
+          showNoNoteState();
+        } else {
+          maybeRefreshEditorFromRemote(openedNote);
+        }
+      }
+    },
+    (err) => {
+      console.error("Notes subscription error:", err);
+      setSaveStatus("offline", "Offline");
+    }
+  );
+}
+
+// Moves any notes written before sign-in into the account, so nothing is lost.
+async function migrateLocalNotesToCloud(uid) {
+  const localList = loadLocalNotesRaw();
+  if (!localList.length) return;
+
+  try {
+    for (const note of localList) {
+      await addDoc(notesCollection(uid), {
+        title: note.title || "",
+        html: note.html || "",
+        font: note.font || DEFAULT_FONT,
+        fontSize: note.fontSize || DEFAULT_SIZE,
+        pageSize: note.pageSize || DEFAULT_PAGE_SIZE,
+        pinned: !!note.pinned,
+        color: note.color || null,
+        createdAt: note.createdAt ? Timestamp.fromDate(new Date(note.createdAt)) : serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+    saveLocalNotesRaw([]);
+  } catch (err) {
+    console.error("Could not move notes on this device into your account:", err);
+    // Leave local notes in place so nothing is lost; migration will retry next sign-in.
+  }
+}
+
+/* =========================================================
+   Store abstraction — same calls work whether notes live
+   locally or in Firestore
+   ========================================================= */
+async function createNote() {
+  const last = readLastSettings();
+  const base = {
+    title: "",
+    html: "",
+    font: last.font,
+    fontSize: last.size,
+    pageSize: last.pageSize,
+    pinned: false,
+    color: null,
+  };
+
+  if (storeMode === "cloud" && currentUser) {
+    const ref = await addDoc(notesCollection(currentUser.uid), {
+      ...base,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    return ref.id;
+  }
+
+  const id = makeId();
+  const now = new Date().toISOString();
+  const note = { ...base, id, createdAt: now, updatedAt: now };
+  const list = loadLocalNotesRaw();
+  list.push(note);
+  saveLocalNotesRaw(list);
+  notes = sortNotes(list);
+  renderNotesList();
+  return id;
+}
+
+async function updateNote(id, payload) {
+  if (storeMode === "cloud" && currentUser) {
+    await setDoc(doc(db, "users", currentUser.uid, "notes", id), { ...payload, updatedAt: serverTimestamp() }, { merge: true });
+    return;
+  }
+
+  const list = loadLocalNotesRaw();
+  const idx = list.findIndex((n) => n.id === id);
+  if (idx === -1) return;
+  list[idx] = { ...list[idx], ...payload, updatedAt: new Date().toISOString() };
+  saveLocalNotesRaw(list);
+  notes = sortNotes(list);
+  renderNotesList();
+}
+
+async function removeNote(id) {
+  if (storeMode === "cloud" && currentUser) {
+    await deleteDoc(doc(db, "users", currentUser.uid, "notes", id));
+    return;
+  }
+
+  const list = loadLocalNotesRaw().filter((n) => n.id !== id);
+  saveLocalNotesRaw(list);
+  notes = sortNotes(list);
+  renderNotesList();
+}
+
+function getNoteById(id) {
+  return notes.find((n) => n.id === id) || null;
+}
+
+/* =========================================================
+   Auth: modal open/close
    ========================================================= */
 function setAuthMode(mode) {
   authMode = mode;
@@ -175,6 +362,27 @@ function setAuthMode(mode) {
   }
   authError.hidden = true;
 }
+
+function openAuthModal() {
+  authModal.hidden = false;
+  setTimeout(() => authEmail.focus(), 0);
+}
+
+function closeAuthModal() {
+  authModal.hidden = true;
+  authForm.reset();
+  authError.hidden = true;
+  setAuthMode("signin");
+}
+
+signInOpenBtn.addEventListener("click", openAuthModal);
+authModalClose.addEventListener("click", closeAuthModal);
+authModal.addEventListener("click", (e) => {
+  if (e.target === authModal) closeAuthModal();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !authModal.hidden) closeAuthModal();
+});
 
 authToggle.addEventListener("click", () => {
   setAuthMode(authMode === "signin" ? "signup" : "signin");
@@ -197,6 +405,7 @@ authForm.addEventListener("submit", async (e) => {
     } else {
       await signInWithEmailAndPassword(auth, email, password);
     }
+    closeAuthModal();
   } catch (err) {
     authError.textContent = friendlyAuthError(err);
     authError.hidden = false;
@@ -221,6 +430,8 @@ function friendlyAuthError(err) {
       return "Password should be at least 6 characters.";
     case "auth/network-request-failed":
       return "Can't reach the network. Check your connection and try again.";
+    case "auth/unauthorized-domain":
+      return "This site isn't authorized yet — add its domain in Firebase Authentication settings.";
     default:
       return "Something went wrong. Please try again.";
   }
@@ -231,9 +442,9 @@ signOutBtn.addEventListener("click", () => {
 });
 
 /* =========================================================
-   Auth state -> show the right screen, wire up Firestore
+   Auth state -> switch between local and cloud storage
    ========================================================= */
-onAuthStateChanged(auth, (user) => {
+onAuthStateChanged(auth, async (user) => {
   currentUser = user;
 
   if (unsubscribeNotes) {
@@ -242,54 +453,26 @@ onAuthStateChanged(auth, (user) => {
   }
 
   if (user) {
-    authScreen.hidden = true;
-    appScreen.hidden = false;
+    signedOutRow.hidden = true;
+    signedInRow.hidden = false;
     accountEmailEl.textContent = user.email || "";
+
+    await migrateLocalNotesToCloud(user.uid);
+
+    storeMode = "cloud";
+    currentNoteId = null;
+    autoOpenAttempted = false;
+    showNoNoteState();
     subscribeToNotes(user.uid);
   } else {
-    appScreen.hidden = true;
-    authScreen.hidden = false;
-    notes = [];
+    signedOutRow.hidden = false;
+    signedInRow.hidden = true;
     currentNoteId = null;
-    renderNotesList();
+    autoOpenAttempted = false;
     showNoNoteState();
-    authForm.reset();
-    setAuthMode("signin");
+    loadLocal();
   }
 });
-
-/* =========================================================
-   Firestore: subscribe to this user's notes
-   ========================================================= */
-function notesCollection(uid) {
-  return collection(db, "users", uid, "notes");
-}
-
-function subscribeToNotes(uid) {
-  const q = query(notesCollection(uid), orderBy("updatedAt", "desc"));
-  unsubscribeNotes = onSnapshot(
-    q,
-    (snapshot) => {
-      notes = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
-      renderNotesList();
-
-      if (currentNoteId) {
-        const openNote = notes.find((n) => n.id === currentNoteId);
-        if (!openNote) {
-          // Note was deleted (e.g. from another device)
-          currentNoteId = null;
-          showNoNoteState();
-        } else {
-          maybeRefreshEditorFromRemote(openNote);
-        }
-      }
-    },
-    (err) => {
-      console.error("Notes subscription error:", err);
-      setSaveStatus("offline", "Offline");
-    }
-  );
-}
 
 /* =========================================================
    Rendering: sidebar list
@@ -328,15 +511,33 @@ function renderNotesList() {
     const top = document.createElement("div");
     top.className = "note-row-top";
 
+    const titleWrap = document.createElement("div");
+    titleWrap.className = "note-title-wrap";
+
+    if (note.color) {
+      const dot = document.createElement("span");
+      dot.className = "note-color-dot";
+      dot.style.background = note.color;
+      titleWrap.appendChild(dot);
+    }
+
+    if (note.pinned) {
+      const pin = document.createElement("span");
+      pin.className = "note-pin-icon";
+      pin.innerHTML = '<svg viewBox="0 0 24 24" width="11" height="11"><path d="M14.5 3.5l6 6-3 3-1-1-3.5 3.5.6 3.4-1.4 1.4-4-4-4 4-1.4-1.4 4-4-4-4L4.7 9l3.4.6L11.5 6.1l-1-1 3-3Z" fill="currentColor"/></svg>';
+      titleWrap.appendChild(pin);
+    }
+
     const title = document.createElement("span");
     title.className = "note-title";
     title.textContent = note.title && note.title.trim() ? note.title : "Untitled";
+    titleWrap.appendChild(title);
 
     const time = document.createElement("span");
     time.className = "note-time";
     time.textContent = relativeTime(toDate(note.updatedAt) || toDate(note.createdAt));
 
-    top.appendChild(title);
+    top.appendChild(titleWrap);
     top.appendChild(time);
 
     const snippet = document.createElement("div");
@@ -358,6 +559,14 @@ searchInput.addEventListener("input", () => {
   renderNotesList();
 });
 
+function maybeAutoOpen() {
+  if (autoOpenAttempted) return;
+  autoOpenAttempted = true;
+  if (!currentNoteId && notes.length > 0) {
+    openNote(notes[0].id);
+  }
+}
+
 /* =========================================================
    Editor: open / new / delete
    ========================================================= */
@@ -372,14 +581,20 @@ function showEditor() {
 }
 
 function openNote(id) {
-  const note = notes.find((n) => n.id === id);
+  const note = getNoteById(id);
   if (!note) return;
 
   currentNoteId = id;
   renderNotesList();
   showEditor();
   closeSidebarDrawer();
+  closeColorPopover();
 
+  applyNoteToEditor(note);
+  setSaveStatus("saved", "Saved");
+}
+
+function applyNoteToEditor(note) {
   titleInput.value = note.title || "";
   bodyEditable.innerHTML = note.html || "";
 
@@ -392,12 +607,12 @@ function openNote(id) {
   pageSelect.value = pageSize;
   applyEditorStyles(font, size, pageSize);
 
-  setSaveStatus("saved", "Saved");
+  pinNoteBtn.classList.toggle("is-active", !!note.pinned);
+  updateColorPopoverSelection(note.color || null);
+  updateWordCount();
 }
 
 function maybeRefreshEditorFromRemote(note) {
-  // Don't yank text out from under someone who is actively typing,
-  // and don't reapply a write we just made ourselves.
   const isFocused = document.activeElement === titleInput || bodyEditable.contains(document.activeElement);
   const recentlyEditedLocally = Date.now() - lastLocalEditAt < SAVE_DEBOUNCE_MS + 1500;
   if (isFocused || recentlyEditedLocally) return;
@@ -413,30 +628,26 @@ function maybeRefreshEditorFromRemote(note) {
   sizeSelect.value = String(size);
   pageSelect.value = pageSize;
   applyEditorStyles(font, size, pageSize);
+
+  pinNoteBtn.classList.toggle("is-active", !!note.pinned);
+  updateColorPopoverSelection(note.color || null);
+  updateWordCount();
 }
 
 newNoteBtn.addEventListener("click", async () => {
-  if (!currentUser) return;
-  const last = readLastSettings();
-  const newDoc = {
-    title: "",
-    html: "",
-    font: last.font,
-    fontSize: last.size,
-    pageSize: last.pageSize,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  };
   try {
-    const ref = await addDoc(notesCollection(currentUser.uid), newDoc);
-    currentNoteId = ref.id;
-    // Optimistically show a blank editor right away; the snapshot will confirm shortly.
+    const id = await createNote();
+    currentNoteId = id;
+    const last = readLastSettings();
     titleInput.value = "";
     bodyEditable.innerHTML = "";
     fontSelect.value = last.font;
     sizeSelect.value = String(last.size);
     pageSelect.value = last.pageSize;
     applyEditorStyles(last.font, last.size, last.pageSize);
+    pinNoteBtn.classList.remove("is-active");
+    updateColorPopoverSelection(null);
+    updateWordCount();
     showEditor();
     closeSidebarDrawer();
     setSaveStatus("saved", "Saved");
@@ -448,8 +659,8 @@ newNoteBtn.addEventListener("click", async () => {
 });
 
 deleteNoteBtn.addEventListener("click", async () => {
-  if (!currentUser || !currentNoteId) return;
-  const note = notes.find((n) => n.id === currentNoteId);
+  if (!currentNoteId) return;
+  const note = getNoteById(currentNoteId);
   const label = note && note.title ? `"${note.title}"` : "this note";
   const confirmed = window.confirm(`Delete ${label}? This can't be undone.`);
   if (!confirmed) return;
@@ -459,9 +670,107 @@ deleteNoteBtn.addEventListener("click", async () => {
   showNoNoteState();
 
   try {
-    await deleteDoc(doc(db, "users", currentUser.uid, "notes", idToDelete));
+    await removeNote(idToDelete);
   } catch (err) {
     console.error("Could not delete note:", err);
+  }
+});
+
+duplicateNoteBtn.addEventListener("click", async () => {
+  if (!currentNoteId) return;
+  const note = getNoteById(currentNoteId);
+  if (!note) return;
+
+  try {
+    const id = await createNote();
+    const copyTitle = note.title && note.title.trim() ? `${note.title} copy` : "";
+    await updateNote(id, {
+      title: copyTitle,
+      html: note.html || "",
+      font: note.font || DEFAULT_FONT,
+      fontSize: note.fontSize || DEFAULT_SIZE,
+      pageSize: note.pageSize || DEFAULT_PAGE_SIZE,
+      pinned: false,
+      color: note.color || null,
+    });
+    openNote(id);
+  } catch (err) {
+    console.error("Could not duplicate note:", err);
+  }
+});
+
+pinNoteBtn.addEventListener("click", async () => {
+  if (!currentNoteId) return;
+  const note = getNoteById(currentNoteId);
+  if (!note) return;
+  const nextPinned = !note.pinned;
+  pinNoteBtn.classList.toggle("is-active", nextPinned);
+  try {
+    await updateNote(currentNoteId, { pinned: nextPinned });
+  } catch (err) {
+    console.error("Could not update pin:", err);
+  }
+});
+
+/* =========================================================
+   Editor: color tag popover
+   ========================================================= */
+function buildColorPopover() {
+  colorPopover.innerHTML = "";
+
+  const noneBtn = document.createElement("button");
+  noneBtn.type = "button";
+  noneBtn.className = "color-swatch color-swatch-none";
+  noneBtn.setAttribute("aria-label", "No color");
+  noneBtn.dataset.color = "";
+  colorPopover.appendChild(noneBtn);
+
+  for (const hex of NOTE_COLORS) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "color-swatch";
+    btn.style.background = hex;
+    btn.dataset.color = hex;
+    btn.setAttribute("aria-label", "Set note color");
+    colorPopover.appendChild(btn);
+  }
+
+  colorPopover.addEventListener("click", async (e) => {
+    const btn = e.target.closest(".color-swatch");
+    if (!btn || !currentNoteId) return;
+    const color = btn.dataset.color || null;
+    updateColorPopoverSelection(color);
+    closeColorPopover();
+    try {
+      await updateNote(currentNoteId, { color });
+    } catch (err) {
+      console.error("Could not update color:", err);
+    }
+  });
+}
+buildColorPopover();
+
+function updateColorPopoverSelection(color) {
+  const swatches = colorPopover.querySelectorAll(".color-swatch");
+  swatches.forEach((el) => {
+    const val = el.dataset.color || null;
+    el.classList.toggle("is-selected", val === color);
+  });
+}
+
+function openColorPopover() {
+  colorPopover.hidden = false;
+}
+function closeColorPopover() {
+  colorPopover.hidden = true;
+}
+colorTagBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  colorPopover.hidden ? openColorPopover() : closeColorPopover();
+});
+document.addEventListener("click", (e) => {
+  if (!colorPopover.hidden && !colorPopover.contains(e.target) && e.target !== colorTagBtn) {
+    closeColorPopover();
   }
 });
 
@@ -561,6 +870,30 @@ document.addEventListener("selectionchange", () => {
   }
 });
 
+// Keyboard shortcuts for formatting, so Cmd/Ctrl+B/I/U behave consistently.
+bodyEditable.addEventListener("keydown", (e) => {
+  const mod = e.metaKey || e.ctrlKey;
+  if (!mod) return;
+  const key = e.key.toLowerCase();
+  const cmdMap = { b: "bold", i: "italic", u: "underline" };
+  if (cmdMap[key]) {
+    e.preventDefault();
+    document.execCommand(cmdMap[key], false, null);
+    updateFormatButtonStates();
+    lastLocalEditAt = Date.now();
+    scheduleSave();
+  }
+});
+
+/* =========================================================
+   Editor: word count
+   ========================================================= */
+function updateWordCount() {
+  const text = (bodyEditable.textContent || "").trim();
+  const words = text ? text.split(/\s+/).length : 0;
+  wordCountEl.textContent = words === 1 ? "1 word" : `${words} words`;
+}
+
 /* =========================================================
    Editor: typing -> debounced save
    ========================================================= */
@@ -571,6 +904,7 @@ titleInput.addEventListener("input", () => {
 
 bodyEditable.addEventListener("input", () => {
   lastLocalEditAt = Date.now();
+  updateWordCount();
   scheduleSave();
 });
 
@@ -583,7 +917,7 @@ function setSaveStatus(state, text) {
 }
 
 async function saveCurrentNote() {
-  if (!currentUser || !currentNoteId) return;
+  if (!currentNoteId) return;
 
   setSaveStatus("saving", "Saving…");
 
@@ -594,19 +928,17 @@ async function saveCurrentNote() {
     font,
     fontSize: size,
     pageSize,
-    updatedAt: serverTimestamp(),
   };
 
   try {
-    await setDoc(doc(db, "users", currentUser.uid, "notes", currentNoteId), payload, { merge: true });
-    setSaveStatus("saved", "Saved");
+    await updateNote(currentNoteId, payload);
+    setSaveStatus("saved", storeMode === "cloud" ? "Saved" : "Saved on this device");
   } catch (err) {
     console.error("Could not save note:", err);
     setSaveStatus("offline", "Will sync when online");
   }
 }
 
-// Save immediately if the page is being hidden/closed with unsaved changes.
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden" && currentNoteId) {
     saveCurrentNote();
@@ -643,4 +975,10 @@ if ("serviceWorker" in navigator) {
 window.addEventListener("online", () => currentNoteId && setSaveStatus("saved", "Saved"));
 window.addEventListener("offline", () => setSaveStatus("offline", "Offline — will sync later"));
 
+/* =========================================================
+   Boot: show notes immediately from local storage.
+   onAuthStateChanged (above) will switch to cloud sync shortly
+   after, if there's a signed-in session.
+   ========================================================= */
 showNoNoteState();
+loadLocal();

@@ -26,38 +26,8 @@
 </head>
 <body>
 
-<!-- ===================== AUTH SCREEN ===================== -->
-<main id="auth-screen" class="auth-screen" hidden>
-  <div class="auth-card">
-    <div class="auth-mark" aria-hidden="true">
-      <svg viewBox="0 0 24 24" width="26" height="26" fill="none">
-        <path d="M6 3h9l5 5v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z" fill="#F7F6F1"/>
-        <path d="M15 3v5h5" fill="#24409C"/>
-        <path d="M8.5 13h7M8.5 16h7M8.5 10.2h4" stroke="#3454D1" stroke-width="1.15" stroke-linecap="round"/>
-      </svg>
-    </div>
-    <h1>Notes</h1>
-    <p class="auth-sub">Sign in to write and sync across your devices.</p>
-
-    <form id="auth-form" class="auth-form" novalidate>
-      <label class="field">
-        <span>Email</span>
-        <input type="email" id="auth-email" autocomplete="email" required />
-      </label>
-      <label class="field">
-        <span>Password</span>
-        <input type="password" id="auth-password" autocomplete="current-password" required minlength="6" />
-      </label>
-      <p id="auth-error" class="auth-error" role="alert" hidden></p>
-      <button type="submit" id="auth-submit" class="btn-primary">Continue</button>
-    </form>
-
-    <button type="button" id="auth-toggle" class="auth-toggle">New here? Create an account</button>
-  </div>
-</main>
-
-<!-- ===================== APP SCREEN ===================== -->
-<div id="app-screen" class="app" hidden>
+<!-- ===================== APP SCREEN (always visible — works locally, syncs when signed in) ===================== -->
+<div id="app-screen" class="app">
 
   <div id="sidebar-backdrop" class="sidebar-backdrop" hidden></div>
 
@@ -86,8 +56,16 @@
     </div>
 
     <div class="sidebar-bottom">
-      <span id="account-email" class="account-email"></span>
-      <button id="sign-out-btn" class="link-btn">Sign out</button>
+      <div id="signed-out-row" class="signed-out-row">
+        <button id="sign-in-open-btn" class="btn-signin">
+          <svg viewBox="0 0 24 24" width="14" height="14"><path d="M14 4h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-4M10 16l4-4-4-4M14 12H4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+          Sign in to sync
+        </button>
+      </div>
+      <div id="signed-in-row" class="signed-in-row" hidden>
+        <span id="account-email" class="account-email"></span>
+        <button id="sign-out-btn" class="link-btn">Sign out</button>
+      </div>
     </div>
   </aside>
 
@@ -98,35 +76,69 @@
         <svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 6h16M4 12h16M4 18h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
       </button>
 
-      <div class="toolbar-group">
-        <label class="sr-only" for="font-select">Font</label>
-        <select id="font-select" class="tb-select" title="Font"></select>
+      <div class="toolbar-scroller">
+        <div class="toolbar-group">
+          <label class="sr-only" for="font-select">Font</label>
+          <select id="font-select" class="tb-select" title="Font"></select>
 
-        <label class="sr-only" for="size-select">Font size</label>
-        <select id="size-select" class="tb-select tb-select-narrow" title="Font size"></select>
-      </div>
+          <label class="sr-only" for="size-select">Font size</label>
+          <select id="size-select" class="tb-select tb-select-narrow" title="Font size"></select>
+        </div>
 
-      <div class="toolbar-divider" role="separator"></div>
+        <div class="toolbar-divider" role="separator"></div>
 
-      <div class="toolbar-group">
-        <button type="button" class="fmt-btn" data-cmd="bold" title="Bold" aria-label="Bold"><b>B</b></button>
-        <button type="button" class="fmt-btn fmt-italic" data-cmd="italic" title="Italic" aria-label="Italic"><i>I</i></button>
-        <button type="button" class="fmt-btn fmt-underline" data-cmd="underline" title="Underline" aria-label="Underline"><u>U</u></button>
-        <button type="button" class="fmt-btn" data-cmd="insertUnorderedList" title="Bulleted list" aria-label="Bulleted list">
-          <svg viewBox="0 0 24 24" width="16" height="16"><circle cx="4.5" cy="6" r="1.4" fill="currentColor"/><circle cx="4.5" cy="12" r="1.4" fill="currentColor"/><circle cx="4.5" cy="18" r="1.4" fill="currentColor"/><path d="M9 6h11M9 12h11M9 18h11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
-        </button>
-      </div>
+        <div class="toolbar-group">
+          <button type="button" class="fmt-btn" data-cmd="bold" title="Bold" aria-label="Bold"><b>B</b></button>
+          <button type="button" class="fmt-btn fmt-italic" data-cmd="italic" title="Italic" aria-label="Italic"><i>I</i></button>
+          <button type="button" class="fmt-btn fmt-underline" data-cmd="underline" title="Underline" aria-label="Underline"><u>U</u></button>
+          <button type="button" class="fmt-btn" data-cmd="insertUnorderedList" title="Bulleted list" aria-label="Bulleted list">
+            <svg viewBox="0 0 24 24" width="16" height="16"><circle cx="4.5" cy="6" r="1.4" fill="currentColor"/><circle cx="4.5" cy="12" r="1.4" fill="currentColor"/><circle cx="4.5" cy="18" r="1.4" fill="currentColor"/><path d="M9 6h11M9 12h11M9 18h11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          </button>
+        </div>
 
-      <div class="toolbar-divider" role="separator"></div>
+        <div class="toolbar-divider" role="separator"></div>
 
-      <div class="toolbar-group">
-        <label class="sr-only" for="page-select">Paper size</label>
-        <select id="page-select" class="tb-select" title="Paper size"></select>
+        <div class="toolbar-group">
+          <button type="button" class="fmt-btn" data-cmd="justifyLeft" title="Align left" aria-label="Align left">
+            <svg viewBox="0 0 24 24" width="16" height="16"><path d="M4 6h16M4 12h10M4 18h14" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+          </button>
+          <button type="button" class="fmt-btn" data-cmd="justifyCenter" title="Align center" aria-label="Align center">
+            <svg viewBox="0 0 24 24" width="16" height="16"><path d="M4 6h16M7 12h10M5 18h14" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+          </button>
+          <button type="button" class="fmt-btn" data-cmd="justifyRight" title="Align right" aria-label="Align right">
+            <svg viewBox="0 0 24 24" width="16" height="16"><path d="M4 6h16M10 12h10M6 18h14" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+
+        <div class="toolbar-divider" role="separator"></div>
+
+        <div class="toolbar-group">
+          <label class="sr-only" for="page-select">Paper size</label>
+          <select id="page-select" class="tb-select" title="Paper size"></select>
+        </div>
+
+        <div class="toolbar-divider" role="separator"></div>
+
+        <div class="toolbar-group toolbar-group-relative">
+          <button type="button" id="color-tag-btn" class="fmt-btn" title="Note color" aria-label="Note color">
+            <svg viewBox="0 0 24 24" width="16" height="16"><circle cx="12" cy="12" r="7.2" stroke="currentColor" stroke-width="1.7" fill="none"/></svg>
+          </button>
+          <div id="color-popover" class="color-popover" hidden></div>
+
+          <button type="button" id="pin-note-btn" class="fmt-btn" title="Pin note" aria-label="Pin note">
+            <svg viewBox="0 0 24 24" width="16" height="16"><path d="M14.5 3.5l6 6-3 3-1-1-3.5 3.5.6 3.4-1.4 1.4-4-4-4 4-1.4-1.4 4-4-4-4L4.7 9l3.4.6L11.5 6.1l-1-1 3-3Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" fill="none"/></svg>
+          </button>
+
+          <button type="button" id="duplicate-note-btn" class="fmt-btn" title="Duplicate note" aria-label="Duplicate note">
+            <svg viewBox="0 0 24 24" width="16" height="16"><rect x="8" y="8" width="11" height="12.5" rx="1.6" stroke="currentColor" stroke-width="1.5"/><path d="M5.5 15.5V6A1.6 1.6 0 0 1 7 4.4h8.5" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>
+          </button>
+        </div>
       </div>
 
       <div class="toolbar-spacer"></div>
 
       <div class="toolbar-group">
+        <span id="word-count" class="word-count">0 words</span>
         <span id="save-status" class="save-status"><span class="save-dot"></span><span id="save-status-text">Saved</span></span>
         <button id="delete-note-btn" class="icon-btn" title="Delete note" aria-label="Delete note">
           <svg viewBox="0 0 24 24" width="17" height="17"><path d="M4 7h16M9.5 7V5a1.5 1.5 0 0 1 1.5-1.5h2A1.5 1.5 0 0 1 14.5 5v2M6.5 7l.8 12.2A2 2 0 0 0 9.3 21h5.4a2 2 0 0 0 2-1.8L18.5 7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
@@ -147,6 +159,40 @@
       </div>
     </div>
   </section>
+</div>
+
+<!-- ===================== SIGN-IN MODAL ===================== -->
+<div id="auth-modal" class="modal-overlay" hidden>
+  <div class="modal-card auth-card" role="dialog" aria-modal="true" aria-labelledby="auth-modal-title">
+    <button type="button" id="auth-modal-close" class="modal-close" aria-label="Close">
+      <svg viewBox="0 0 24 24" width="16" height="16"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+    </button>
+
+    <div class="auth-mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="26" height="26" fill="none">
+        <path d="M6 3h9l5 5v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z" fill="#F7F6F1"/>
+        <path d="M15 3v5h5" fill="#24409C"/>
+        <path d="M8.5 13h7M8.5 16h7M8.5 10.2h4" stroke="#3454D1" stroke-width="1.15" stroke-linecap="round"/>
+      </svg>
+    </div>
+    <h1 id="auth-modal-title">Sign in</h1>
+    <p class="auth-sub">Sign in to sync your notes across devices. Anything you've written here will move with you.</p>
+
+    <form id="auth-form" class="auth-form" novalidate>
+      <label class="field">
+        <span>Email</span>
+        <input type="email" id="auth-email" autocomplete="email" required />
+      </label>
+      <label class="field">
+        <span>Password</span>
+        <input type="password" id="auth-password" autocomplete="current-password" required minlength="6" />
+      </label>
+      <p id="auth-error" class="auth-error" role="alert" hidden></p>
+      <button type="submit" id="auth-submit" class="btn-primary">Continue</button>
+    </form>
+
+    <button type="button" id="auth-toggle" class="auth-toggle">New here? Create an account</button>
+  </div>
 </div>
 
 <script type="module" src="app.js"></script>
