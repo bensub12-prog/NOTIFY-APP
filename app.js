@@ -47,7 +47,7 @@ const NOTE_COLORS = [
   "#8FAEE0", "#B79EDB", "#D9A6C2", "#B9AF9B",
 ];
 
-const SAVE_DEBOUNCE_MS = 700;
+const SAVE_DEBOUNCE_MS = 400;
 const LAST_SETTINGS_KEY = "notes-app:last-settings";
 const LOCAL_NOTES_KEY = "notes-app:local-notes";
 
@@ -115,14 +115,6 @@ let authMode = "signin";        // "signin" | "signup"
 /* =========================================================
    Small helpers
    ========================================================= */
-function debounce(fn, ms) {
-  let t = null;
-  return (...args) => {
-    clearTimeout(t);
-    t = setTimeout(() => fn(...args), ms);
-  };
-}
-
 function makeId() {
   if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
   return `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -445,6 +437,13 @@ signOutBtn.addEventListener("click", () => {
    Auth state -> switch between local and cloud storage
    ========================================================= */
 onAuthStateChanged(auth, async (user) => {
+  if (currentNoteId) {
+    // Flush any in-progress edit into the outgoing store (local or cloud)
+    // before switching, so a sign-in/out never drops a keystroke.
+    cancelScheduledSave();
+    saveCurrentNote();
+  }
+
   currentUser = user;
 
   if (unsubscribeNotes) {
@@ -581,6 +580,13 @@ function showEditor() {
 }
 
 function openNote(id) {
+  if (currentNoteId && currentNoteId !== id) {
+    // Flush whatever was just typed into the note we're leaving, right now —
+    // captured synchronously before we swap the editor's contents below.
+    cancelScheduledSave();
+    saveCurrentNote();
+  }
+
   const note = getNoteById(id);
   if (!note) return;
 
@@ -635,6 +641,11 @@ function maybeRefreshEditorFromRemote(note) {
 }
 
 newNoteBtn.addEventListener("click", async () => {
+  if (currentNoteId) {
+    // Flush the note we're leaving before switching to a fresh blank one.
+    cancelScheduledSave();
+    saveCurrentNote();
+  }
   try {
     const id = await createNote();
     currentNoteId = id;
@@ -665,6 +676,8 @@ deleteNoteBtn.addEventListener("click", async () => {
   const confirmed = window.confirm(`Delete ${label}? This can't be undone.`);
   if (!confirmed) return;
 
+  cancelScheduledSave(); // don't let a queued write resurrect the note we're about to delete
+
   const idToDelete = currentNoteId;
   currentNoteId = null;
   showNoNoteState();
@@ -681,15 +694,24 @@ duplicateNoteBtn.addEventListener("click", async () => {
   const note = getNoteById(currentNoteId);
   if (!note) return;
 
+  // Flush first so the duplicate can be built from whatever's live in the
+  // editor right now, not from a possibly-stale copy in the notes list.
+  cancelScheduledSave();
+  await saveCurrentNote();
+
+  const { font, size, pageSize } = currentEditorSettings();
+  const liveTitle = titleInput.value;
+  const liveHtml = bodyEditable.innerHTML;
+
   try {
     const id = await createNote();
-    const copyTitle = note.title && note.title.trim() ? `${note.title} copy` : "";
+    const copyTitle = liveTitle && liveTitle.trim() ? `${liveTitle} copy` : "";
     await updateNote(id, {
       title: copyTitle,
-      html: note.html || "",
-      font: note.font || DEFAULT_FONT,
-      fontSize: note.fontSize || DEFAULT_SIZE,
-      pageSize: note.pageSize || DEFAULT_PAGE_SIZE,
+      html: liveHtml,
+      font,
+      fontSize: size,
+      pageSize,
       pinned: false,
       color: note.color || null,
     });
@@ -823,21 +845,21 @@ fontSelect.addEventListener("change", () => {
   const { font, size, pageSize } = currentEditorSettings();
   applyEditorStyles(font, size, pageSize);
   writeLastSettings({ font, size, pageSize });
-  scheduleSave();
+  queueSave();
 });
 
 sizeSelect.addEventListener("change", () => {
   const { font, size, pageSize } = currentEditorSettings();
   applyEditorStyles(font, size, pageSize);
   writeLastSettings({ font, size, pageSize });
-  scheduleSave();
+  queueSave();
 });
 
 pageSelect.addEventListener("change", () => {
   const { font, size, pageSize } = currentEditorSettings();
   applyEditorStyles(font, size, pageSize);
   writeLastSettings({ font, size, pageSize });
-  scheduleSave();
+  queueSave();
 });
 
 fmtButtons.forEach((btn) => {
@@ -847,7 +869,7 @@ fmtButtons.forEach((btn) => {
     document.execCommand(cmd, false, null);
     updateFormatButtonStates();
     lastLocalEditAt = Date.now();
-    scheduleSave();
+    queueSave();
   });
 });
 
@@ -881,7 +903,7 @@ bodyEditable.addEventListener("keydown", (e) => {
     document.execCommand(cmdMap[key], false, null);
     updateFormatButtonStates();
     lastLocalEditAt = Date.now();
-    scheduleSave();
+    queueSave();
   }
 });
 
@@ -899,16 +921,46 @@ function updateWordCount() {
    ========================================================= */
 titleInput.addEventListener("input", () => {
   lastLocalEditAt = Date.now();
-  scheduleSave();
+  queueSave();
 });
 
 bodyEditable.addEventListener("input", () => {
   lastLocalEditAt = Date.now();
   updateWordCount();
-  scheduleSave();
+  queueSave();
 });
 
-const scheduleSave = debounce(saveCurrentNote, SAVE_DEBOUNCE_MS);
+titleInput.addEventListener("blur", flushIfPending);
+bodyEditable.addEventListener("blur", flushIfPending);
+
+let saveTimer = null;
+
+function cancelScheduledSave() {
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+}
+
+// Shows "Saving…" the instant you type, then writes shortly after you pause —
+// so autosave always feels immediate even though writes are lightly batched.
+function queueSave() {
+  cancelScheduledSave();
+  setSaveStatus("saving", "Saving…");
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    saveCurrentNote();
+  }, SAVE_DEBOUNCE_MS);
+}
+
+// Writes right away instead of waiting out the debounce — used whenever
+// focus leaves the editor, so nothing is left unsaved.
+function flushIfPending() {
+  if (saveTimer) {
+    cancelScheduledSave();
+    saveCurrentNote();
+  }
+}
 
 function setSaveStatus(state, text) {
   saveStatusEl.classList.remove("saving", "saved", "offline");
@@ -941,6 +993,16 @@ async function saveCurrentNote() {
 
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden" && currentNoteId) {
+    cancelScheduledSave();
+    saveCurrentNote();
+  }
+});
+
+// Best-effort: catch the case where the tab or app is closed outright
+// mid-keystroke, e.g. swiping away the PWA on iPad.
+window.addEventListener("pagehide", () => {
+  if (currentNoteId) {
+    cancelScheduledSave();
     saveCurrentNote();
   }
 });
